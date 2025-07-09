@@ -13,6 +13,35 @@ pipeline {
     }
   }
   stages {
+    stage('Check for Important Changes') {
+      when {
+        not {
+          anyOf {
+            changeset "docker/**"
+            changeset "docs/**"
+            changeset "pom.xml"
+            changeset "src/main/**"
+            triggeredBy cause: 'UserIdCause'
+          }
+        }
+      }
+      steps {
+        echo 'No relevant changes detected. Skipping the rest of the pipeline.'
+        script {
+          currentBuild.result = 'NOT_BUILT'
+          error("No changes in important paths. Pipeline aborted.")
+        }
+      }
+    }
+    stage('Trivy Code Scan (Dependencies)') {
+      steps {
+        script {
+          sh '''
+            trivy fs --scanners vuln,secret,misconfig --output trivy-fs-report.txt .
+          '''
+        }
+      }
+    }
 
     stage('Building images') {
       steps{
@@ -20,15 +49,36 @@ pipeline {
           echo 'Pulled - ' + env.GIT_BRANCH
           devImage = docker.build( devRegistry, "-f ./docker/dev.dockerfile .")
           deplImage = docker.build( deplRegistry, "-f ./docker/depl.dockerfile .")
-          testImage = docker.build( testRegistry, "-f ./docker/test.dockerfile .")
         }
       }
     }
 
-    stage('Unit Tests and CodeCoverage Test'){
-      steps{
-        script{
-          sh 'docker compose -f docker-compose-test.yml up test'
+    stage('Trivy Docker Image Scan and Report') {
+      steps {
+        script {
+          sh "trivy image --output trivy-dev-image-report.txt ${devImage.imageName()}"
+          sh "trivy image --output trivy-depl-image-report.txt ${deplImage.imageName()}"
+        }
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: 'trivy-*.txt', allowEmptyArchive: true
+          publishHTML(target: [
+            allowMissing: true,
+            keepAll: true,
+            reportDir: '.',
+            reportFiles: 'trivy-fs-report.txt, trivy-dev-image-report.txt, trivy-depl-image-report.txt',
+            reportName: 'Trivy Reports'
+          ])
+        }
+      }
+    }
+    stage('Unit Tests and CodeCoverage Test') {
+      steps {
+        script {
+          sh 'mkdir -p configs'
+          sh 'cp /home/ubuntu/configs/aaa-config-test.json ./configs/config-test.json'
+          sh 'mvn clean test checkstyle:checkstyle pmd:pmd'
         }
         xunit (
           thresholds: [ skipped(failureThreshold: '15'), failed(failureThreshold: '0') ],
@@ -43,11 +93,8 @@ pipeline {
           recordIssues enabledForFailure: true, tool: pmdParser(pattern: 'target/pmd.xml')
         }
         failure{
-          script{
-            sh 'docker compose -f docker-compose-test.yml down --remove-orphans'
-          }
           error "Test failure. Stopping pipeline execution!"
-        } 
+        }
         cleanup{
           script{
             sh 'sudo rm -rf target/'
@@ -92,7 +139,7 @@ pipeline {
         node('built-in') {
           script{
             runZapAttack()
-            }
+          }
         }
       }
       post{
@@ -104,7 +151,7 @@ pipeline {
           node('built-in') {
             script{
               archiveZap failHighAlerts: 1, failMediumAlerts: 1, failLowAlerts: 2
-            }  
+            }
           }
         }
         failure{
@@ -122,18 +169,9 @@ pipeline {
 
     stage('Continuous Deployment') {
       when {
-        allOf {
-          anyOf {
-            changeset "docker/**"
-            changeset "docs/**"
-            changeset "pom.xml"
-            changeset "src/main/**"
-            triggeredBy cause: 'UserIdCause'
-          }
-          expression {
+        expression {
             return env.GIT_BRANCH == 'origin/main';
           }
-        }
       }
       stages {
         stage('Push Images') {
@@ -162,7 +200,7 @@ pipeline {
                 echo "Health check complete; Server is up."
                 exit 0
               fi
-              '''                
+              '''
             }
           }
           post{
