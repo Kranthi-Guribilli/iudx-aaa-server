@@ -28,9 +28,6 @@ pipeline {
       }
       stages {
         stage('Trivy Code Scan (Dependencies)') {
-          when {
-            expression { return env.RUN_PIPELINE == 'true' }
-          }
           steps {
             script {
               sh '''
@@ -41,9 +38,6 @@ pipeline {
         }
 
         stage('Building images') {
-          when {
-            expression { return env.RUN_PIPELINE == 'true' }
-          }
           steps{
             script {
               echo 'Pulled - ' + env.GIT_BRANCH
@@ -54,9 +48,6 @@ pipeline {
         }
 
         stage('Trivy Docker Image Scan and Report') {
-          when {
-            expression { return env.RUN_PIPELINE == 'true' }
-          }
           steps {
             script {
               sh "trivy image --output trivy-dev-image-report.txt ${devImage.imageName()}"
@@ -77,9 +68,6 @@ pipeline {
           }
         }
         stage('Unit Tests and CodeCoverage Test') {
-          when {
-            expression { return env.RUN_PIPELINE == 'true' }
-          }
           steps {
             script {
               sh 'mkdir -p configs'
@@ -111,9 +99,6 @@ pipeline {
         }
 
         stage('Run aaa-server for Integration Test'){
-          when {
-            expression { return env.RUN_PIPELINE == 'true' }
-          }
           steps{
             script{
                 sh 'docker/runIntegTests.sh'
@@ -133,9 +118,6 @@ pipeline {
         }
 
         stage('Integration Test & OWASP ZAP pen test'){
-          when {
-            expression { return env.RUN_PIPELINE == 'true' }
-          }
           steps{
             node('built-in') {
               script{
